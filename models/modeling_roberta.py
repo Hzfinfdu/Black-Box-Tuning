@@ -639,6 +639,7 @@ class RobertaModel(RobertaPreTrainedModel):
         self,
         input_ids=None,
         attention_mask=None,
+        prompt_embedding=None,
         token_type_ids=None,
         position_ids=None,
         head_mask=None,
@@ -648,7 +649,6 @@ class RobertaModel(RobertaPreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
-        prompt_embedding=None,
         concat_prompt=False,
     ):
         r"""

@@ -1,5 +1,4 @@
-# Black-Box-Tuning for Language-Model-as-a-Service
-Black-Box Tuning (BBT) is a gradient-free method to drive large language models (LLMs) for few-shot learning. It optimizes a sequence of soft prompt tokens prepended to the input of LLMs, without requiring gradients/back-propagation of the LLMs. Therefore, pre-trained general-purposed LLMs can be viewed as black-box models and deployed efficiently on some inference servers. In such a scenario, which we call Language-Model-as-a-Service (LMaaS), BBT can achieve comparable performance to full model tuning by only accessing model inference APIs. Generally, BBT can achieve considerable results on most language understanding datasets within 8k model forward calls.
+# Readme for black-box optimization development version
 
 More details are provided in our ICML paper [Black-Box Tuning for Language-Model-as-a-Service](https://arxiv.org/abs/2201.03514) and our arxiv paper [BBTv2: Pure Black-Box Optimization Can Be Comparable to Gradient Descent for Few-Shot Learning](https://arxiv.org/abs/2205.11200).
 
@@ -19,7 +18,7 @@ git clone https://github.com/txsun1997/Black-Box-Tuning
 cd Black-Box-Tuning
 ```
 
-## Using BBT
+## Running baseline
 
 Now you can run Black-Box Tuning with `run.sh`:
 
@@ -27,15 +26,6 @@ Now you can run Black-Box Tuning with `run.sh`:
 bash run.sh
 ```
 
-In general, you will obtain the following results in ~10 minutes (tested on NVIDIA 3090 GPU):
-
-| SST-2 split | Best Accuracy |
-| ----------- | ------------- |
-| Train       | 100 %         |
-| Dev         | 96.88 %       |
-| Test        | 88.3 %        |
-
-To reproduce other experiments in our paper, change the arguments of `bbt.py`, for example, 
 
 ```bash
 python bbt.py \
@@ -69,32 +59,6 @@ python bbt.py \
   --eval_every 20 \
   --parallel
 ```
-## Using BBTv2
-
-BBTv2 is an improved version of BBT. Instead of optimize the prompt merely in the input layer, BBTv2 adopts a divide-and-conquer algorithm to alternately optimize prompts in every layer (i.e., deep prompt). You can simply try BBTv2 using the following command,
-
-```bash
-python deepbbt.py \
-  --model_name "roberta-large"\
-  --task_name "snli" \
-  --n_prompt_tokens 50 \
-  --intrinsic_dim 500 \
-  --k_shot 16 \
-  --device "cuda:0" \
-  --seed 42 \
-  --loss_type "ce" \
-  --cat_or_add "add" \
-  --random_proj "normal" \
-  --sigma1 1 \
-  --sigma2 0.2 \
-  --popsize 20 \
-  --bound 0 \
-  --budget 8000 \
-  --print_every 50 \
-  --eval_every 100
-```
-
-BBTv2 usually confers better results on many label classification tasks (e.g., DBPedia) and entailment tasks (e.g., MRPC, SNLI, RTE, etc.). Note that BBTv2 is still under development and may have some bugs :)
 
 ## Inference Optimization
 
@@ -104,7 +68,7 @@ Here we provide an implementation of inference optimization using ONNX Runtime. 
 
 SDK `onnxruntime-gpu` is required for optimization. Installation of this package can be troublesome. And there may be some environment-specific errors or unexpected performance. But in real-world scenarios, this is a part of the black box on the server side.
 
-On an NVIDIA GeForce RTX 3090 GPU with Driver Version: 470.82.00 and CUDA Version: 11.4, the following code works well to configure the environment.
+On an NVIDIA GeForce RTX 3090 GPU with Driver Version: 470.82.00, CUDA Version: 11.4 and Cudnn Version:8.2.4, the following code works well to configure the environment.
 ```bash
 pip install transformers==4.1.1
 pip install datasets
@@ -157,36 +121,23 @@ python export_and_optimize.py \
   --exported_model_name 'model' \
   --optimized_model_name 'optimized_model'
 ```
-Onnx models are static, but to cat or to add is a branch in the model. During building phase, unused nodes in the model graph are removed for better performance. So you have to build one for each mode.
 
-You can get the following results in 4.3 ± 0.1 minutes, compared to pytorch version of BBT whose training time is 8.9 ± 0.15 minutes (depends on hardware settings)
+## Try your own optimization algorithm
 
-You can get the following results by running BBT 100 times on sst2 with random seed set from 1 to 100.
-Fp16 optimization does not hurt performance on all tasks.
+In this branch, we wrapped BBT in a 3-part logic: arguments-LMForwardAPI-optimization. They are implemented in arguments.py, bbt.py and shallow_bbt_optim.py, respectively.
+We can completely neglect the middle part and just treat it like a black box.
+Since the meaning of arguments is straightforward to understand, we can focus on the optimization part.
 
-| SST-2 split | Best Accuracy   |
-| ----------- | --------------- |
-| Test        | 88.0  %   |
+There is a note in line 62-69 in shallow_bbt_optim.py, before which all we need to modify(or add if we need) are hyperparameters.
+And we can implement our algorithm from then on. We provide a baseline example.
 
-## Citation
+We offer 3 datasets for evaluation, namely sst2(sentiment analysis, 2-label), agnews(topic cls, 4-label) and snli(sentence-pair cls, 3-label).
+Difficulty of the 3 datasets increases in order. So their alias in the code are `easy`, `medium` and `hard`.
 
-If you find this work helpful, please cite:
+We report a baseline result reported in the BBT paper.
 
-```bibtex
-@inproceedings{sun2022bbt,
-  title={Black-Box Tuning for Language-Model-as-a-Service}, 
-  author={Tianxiang Sun and Yunfan Shao and Hong Qian and Xuanjing Huang and Xipeng Qiu},
-  booktitle = {Proceedings of {ICML}},
-  year={2022}
-}
-```
+## Baseline performance
 
-```bibtex
-@article{sun2022bbtv2,
-  title={BBTv2: Pure Black-Box Optimization Can Be Comparable to Gradient Descent for Few-Shot Learning},
-  author={Sun, Tianxiang and He, Zhengfu and Qian, Hong and Huang, Xuanjing and Qiu, Xipeng},
-  journal={arXiv preprint arXiv:2205.11200},
-  year={2022}
-}
-```
-
+sst2(easy): 89.56(0.25)
+agnews(medium): 81.51(0.79)
+snli(hard): 46.58(1.33)

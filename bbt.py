@@ -1,288 +1,45 @@
 import os
 import copy
-import time
 import math
 import random
-
 import torch
-# import fitlog
-import argparse
 import numpy as np
-import cma
-from fastNLP import cache_results, Tester, DataSet
-from transformers import (
-    RobertaConfig,
-    RobertaTokenizer,
-    BertConfig,
-    BertTokenizer,
-    ElectraConfig,
-    ElectraTokenizer,
-    BartConfig,
-    BartTokenizer,
-    T5Config,
-    T5Tokenizer,
-    GPT2Config,
-    GPT2Tokenizer,
-    BartConfig as CPTConfig,
-)
+from fastNLP import Tester, DataSet, cache_results
+from transformers import RobertaConfig, RobertaTokenizer
 from models.modeling_roberta import RobertaForMaskedLM
-from models.modeling_bart import BartForConditionalGeneration
-from models.modeling_t5 import T5ForConditionalGeneration
-from models.modeling_gpt2 import GPT2LMHeadModel
-from models.modeling_bert import BertForMaskedLM
-from models.modeling_electra import ElectraForMaskedLM
-from models.modeling_cpt import CPTForMaskedLM
 from utils import hinge_loss
 from sklearn.metrics import f1_score
+from dataloader import SST2Loader, AGNewsLoader, SNLILoader
+from metrics import SST2Metric, AGNewsMetric, SNLIMetric
+from arguments import get_arguments
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--model_name", default='roberta-large',
-                    choices=['roberta-base', 'roberta-large',
-                             'bert-base-uncased', 'bert-large-uncased',
-                             'google/electra-base-generator', 'google/electra-large-generator',
-                             'facebook/bart-base', 'facebook/bart-large',
-                             't5-small', 't5-base', 't5-large', 't5-3b',
-                             'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl',
-                             'fnlp/cpt-large'], type=str)
-parser.add_argument("--task_name", default='sst2', type=str)
-parser.add_argument("--n_prompt_tokens", default=50, type=int)
-parser.add_argument("--intrinsic_dim", default=500, type=int)
-parser.add_argument("--k_shot", default=16, type=int)
-parser.add_argument("--batch_size", default=32, type=int)
-parser.add_argument("--budget", default=8000, type=int)
-parser.add_argument("--popsize", default=20, type=int)
-parser.add_argument("--bound", default=0, type=int)
-parser.add_argument("--sigma", default=1, type=float)
-parser.add_argument("--print_every", default=50, type=int)
-parser.add_argument("--eval_every", default=100, type=int)
-parser.add_argument("--device", default='cuda:0', type=str)
-parser.add_argument("--alg", default='CMA', type=str)
-parser.add_argument("--random_proj", default='normal', type=str)
-parser.add_argument("--seed", default=42, type=int)
-parser.add_argument("--loss_type", default='ce', type=str)
-parser.add_argument("--cat_or_add", default='add', type=str)
-parser.add_argument("--parallel", action='store_true', help='Whether to allow parallel evaluation')
-parser.add_argument(
-    "--inference_framework",
-    default='pt',
-    type=str,
-    help='''Which inference framework to use. 
-         Currently supports `pt` and `ort`, standing for pytorch and Microsoft onnxruntime respectively'''
-)
-parser.add_argument(
-    "--onnx_model_path",
-    default=None,
-    type=str,
-    help='Path to your onnx model.'
-)
-args = parser.parse_args()
+args = get_arguments()
 
-# below are free hyper-params
-model_name = args.model_name
-if model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-    from dataloader_t5 import SST2Loader, AGNewsLoader, YelpPLoader, DBPediaLoader, RTELoader, MRPCLoader, SNLILoader
-    from metrics_t5 import SST2Metric, AGNewsMetric, YelpPMetric, DBPediaMetric, RTEMetric, MRPCMetric, SNLIMetric
-elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-    from dataloader_gpt import SST2Loader, AGNewsLoader, YelpPLoader, DBPediaLoader, RTELoader, MRPCLoader, SNLILoader
-    from metrics_gpt import SST2Metric, AGNewsMetric, YelpPMetric, DBPediaMetric, RTEMetric, MRPCMetric, SNLIMetric
-elif model_name in ['fnlp/cpt-large']:
-    from dataloader_cpt import ChnSentLoader, AmazonLoader, THUCNewsLoader, BQLoader, CMNLILoader, CCPMLoader, TNewsLoader, OCNLILoader, LCQMCLoader, C3Loader
-    from metrics_cpt import ChnSentMetric, AmazonMetric, THUCNewsMetric, BQMetric, CMNLIMetric, CCPMMetric, TNewsMetric, OCNLIMetric, LCQMCMetric, C3Metric
-else:
-    from dataloader import SST2Loader, AGNewsLoader, YelpPLoader, DBPediaLoader, RTELoader, MRPCLoader, SNLILoader
-    from metrics import SST2Metric, AGNewsMetric, YelpPMetric, DBPediaMetric, RTEMetric, MRPCMetric, SNLIMetric
-
-task_name = args.task_name
-n_prompt_tokens = args.n_prompt_tokens
-intrinsic_dim = args.intrinsic_dim
-k_shot = args.k_shot
-batch_size = args.batch_size
-budget = args.budget
-bound = args.bound
-sigma = args.sigma
-# bound = math.sqrt(intrinsic_dim)
-# if random_proj == 'normal':
-#     bound = math.pow(intrinsic_dim, 0.75)
-# elif model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-#     bound = 100
-# else:
-#     bound = 5
-if args.popsize > 0:
-    popsize = args.popsize
-else:
-    popsize = 4 + 3 * np.log(intrinsic_dim)
-device = args.device
-alg = args.alg
-random_proj = args.random_proj
-seed = args.seed
-loss_type = args.loss_type
-print_every = args.print_every
-eval_every = args.eval_every
-# if task_name in ['mrpc', 'snli', 'qnli', 'rte']:
-#     args.cat_or_add = 'cat'
-cat_or_add = args.cat_or_add
-parallel = args.parallel
-inference_framework = args.inference_framework
-onnx_model_path = args.onnx_model_path
-
-if inference_framework not in ['pt', 'ort']:
-    raise ValueError(f'inference_framework only supports "pt", "ort", got `{inference_framework}` instead.')
-if inference_framework == 'ort':
-    assert onnx_model_path is not None, 'Path to onnx model is required, got None instead.'
-    assert os.path.exists(onnx_model_path), f'In valid onnx model path `{onnx_model_path}`'
-
-# fixed hyper-params
-if cat_or_add == 'add':
-    init_prompt_path = None
-else:
-    init_prompt_path = './nli_base_prompt.pt'
-
-if task_name in ['sst2', 'yelpp', 'rte', 'mrpc', 'chnsent', 'lcqmc', 'bq']:
-    num_labels = 2
-elif task_name in ['snli', 'cmnli', 'ocnli']:
-    num_labels = 3
-elif task_name in ['agnews', 'ccpm', 'c3']:
-    num_labels = 4
-elif task_name in ['amazon']:
-    num_labels = 5
-elif task_name in ['thucnews']:
-    num_labels = 10
-elif task_name in ['dbpedia', 'tnews']:
-    num_labels = 14
-else:
-    raise ValueError
-
-# save_path = '{}_results/{}_results/D_{}_d_{}_data_{}_{}_range_{}_loss_{}_budget_{}_seed_{}_{}_{}_{}_{}'.format(
-#     model_name.replace('/', '-'),
-#     task_name,
-#     n_prompt_tokens * 1024,
-#     intrinsic_dim,
-#     k_shot * num_labels,
-#     alg,
-#     bound,
-#     loss_type,
-#     budget,
-#     seed,
-#     cat_or_add,
-#     random_proj,
-#     'parallel' if parallel else 'serial',
-#     inference_framework
-# )
-# print('Results will be saved in {}'.format(save_path))
-#
-# if os.path.exists(save_path):
-#     print('Experiment already run.')
-#     exit()
-#
-# args.save_path = save_path
-args.bbt_version = 'bbt'
-
-# log_dir = './v2_logs'
-# fitlog.set_log_dir(log_dir)
-# fitlog.commit(__file__, fit_msg=save_path)
-# fitlog.add_hyper(args)
-# fitlog.add_hyper_in_file(__file__)
-
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-
+random.seed(args.seed)
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
 
 class LMForwardAPI:
-    def __init__(self, model_name='roberta-large', n_prompt_tokens=50, task_name='sst2',
-                 loss_type='hinge', init_prompt_path=None):
-        if model_name in ['roberta-base', 'roberta-large']:
-            self.config = RobertaConfig.from_pretrained(model_name)
-            self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
-            self.model = RobertaForMaskedLM.from_pretrained(
-                model_name,
-                config=self.config,
-                n_prompt_tokens=n_prompt_tokens,
-                inference_framework=inference_framework,
-                onnx_model_path=onnx_model_path,
-            )
-            self.model.lm_head.bias = torch.nn.parameter.Parameter(torch.zeros(self.config.vocab_size))
-        elif model_name in ['bert-base-uncased', 'bert-large-uncased']:
-            self.config = BertConfig.from_pretrained(model_name)
-            self.tokenizer = BertTokenizer.from_pretrained(model_name)
-            self.model = BertForMaskedLM.from_pretrained(
-                model_name,
-                config=self.config,
-                n_prompt_tokens=n_prompt_tokens,
-            )
-        elif model_name in ['google/electra-base-generator', 'google/electra-large-generator']:
-            self.config = ElectraConfig.from_pretrained(model_name)
-            self.tokenizer = ElectraTokenizer.from_pretrained(model_name)
-            self.model = ElectraForMaskedLM.from_pretrained(
-                model_name,
-                config=self.config,
-                n_prompt_tokens=n_prompt_tokens,
-            )
-        elif model_name in ['facebook/bart-base', 'facebook/bart-large']:
-            self.config = BartConfig.from_pretrained(model_name)
-            self.tokenizer = BartTokenizer.from_pretrained(model_name)
-            self.model = BartForConditionalGeneration.from_pretrained(
-                model_name,
-                config=self.config,
-                n_prompt_tokens=n_prompt_tokens,
-            )
-        elif model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-            self.config = T5Config.from_pretrained(model_name)
-            self.tokenizer = T5Tokenizer.from_pretrained(model_name)
-            self.model = T5ForConditionalGeneration.from_pretrained(
-                model_name,
-                config=self.config,
-                n_prompt_tokens=n_prompt_tokens,
-            )
-        elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-            self.config = GPT2Config.from_pretrained(model_name)
-            self.tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-            self.model = GPT2LMHeadModel.from_pretrained(
-                model_name,
-                config=self.config,
-                n_prompt_tokens=n_prompt_tokens,
-            )
-        elif model_name in ['fnlp/cpt-large']:
-            self.config = CPTConfig.from_pretrained(model_name)
-            self.tokenizer = BertTokenizer.from_pretrained(model_name)
-            self.model = CPTForMaskedLM.from_pretrained(
-                model_name,
-                config=self.config,
-                n_prompt_tokens=n_prompt_tokens,
-            )
-        else:
-            raise NotImplementedError
+    def __init__(self, intrinsic_dim=500, n_prompt_tokens=50, task_name='easy', loss_type='hinge',
+                 inference_framework='pt', onnx_model_path=None, save_path=None, device='cuda:0'):
+        self.config = RobertaConfig.from_pretrained('roberta-large')
+        self.tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+        self.model = RobertaForMaskedLM.from_pretrained(
+            'roberta-large',
+            config=self.config,
+            n_prompt_tokens=n_prompt_tokens,
+            inference_framework=inference_framework,
+            onnx_model_path=onnx_model_path,
+        )
+        self.model.lm_head.bias = torch.nn.parameter.Parameter(torch.zeros(self.config.vocab_size))
         if inference_framework == 'ort':
             self.model.roberta = None
-        if cat_or_add == 'cat':
-            self.model.set_concat_prompt(True)
-            if init_prompt_path is not None:
-                print('Initialize prompt embedding from {}'.format(init_prompt_path))
-                self.init_prompt = torch.load(init_prompt_path).weight.cpu().reshape(-1)
-            else:
-                print('Initial prompt embedding not found. Initialize to zero embedding.')
-                self.init_prompt = torch.zeros(n_prompt_tokens * self.config.hidden_size)
-            print('Shape of initial prompt embedding: {}'.format(self.init_prompt.shape))
-        else:
-            # self.model.set_concat_prompt(False)
-            self.init_prompt = None
         self.model.to(device)
         self.model.eval()
         self.linear = torch.nn.Linear(intrinsic_dim, n_prompt_tokens * self.config.hidden_size, bias=False)
-        if random_proj == 'normal':
+        if args.random_proj == 'normal':
             # calculate std for normal distribution
-            if model_name in ['roberta-base', 'roberta-large']:
-                embedding = self.model.roberta.get_input_embeddings().weight.clone().cpu()
-            elif model_name in ['bert-base-uncased', 'bert-large-uncased']:
-                embedding = self.model.bert.get_input_embeddings().weight.clone().cpu()
-            elif model_name in ['google/electra-base-generator', 'google/electra-large-generator']:
-                embedding = self.model.electra.get_input_embeddings().weight.clone().cpu()
-            elif model_name in ['facebook/bart-base', 'facebook/bart-large', 'fnlp/cpt-large']:
-                embedding = self.model.model.get_input_embeddings().weight.clone().cpu()
-            elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-                embedding = self.model.transformer.get_input_embeddings().weight.clone().cpu()
-            else:  # T5
-                embedding = self.model.get_input_embeddings().weight.clone().cpu()
+            embedding = self.model.roberta.get_input_embeddings().weight.clone().cpu()
             # embedding = embedding[1000: 2000]
             mu_hat = np.mean(embedding.reshape(-1).detach().cpu().numpy())
             std_hat = np.std(embedding.reshape(-1).detach().cpu().numpy())
@@ -294,84 +51,29 @@ class LMForwardAPI:
             print('[Embedding] mu: {} | std: {} [RandProj]  mu: {} | std: {}'.format(mu_hat, std_hat, mu, std))
             for p in self.linear.parameters():
                 torch.nn.init.normal_(p, mu, std)
+        self.device = device
         self.best_train_perf = 0.0
         self.best_dev_perf = 0.0
         self.best_prompt = None
         self.num_call = 0
-        # self.save_path = save_path
-        self.print_every = print_every
-        self.eval_every = eval_every
+        self.save_path = save_path
+        self.print_every = 50
+        self.eval_every = 100
         self.loss_type = loss_type
-        # if save_path is not None:
-        #     os.makedirs(save_path, exist_ok=True)
-        if task_name == 'sst2':
+        if save_path is not None:
+            os.makedirs(save_path, exist_ok=True)
+        if task_name == 'easy':
             self.metric = SST2Metric(target='labels', pred='logits', tokenizer=tokenizer)
             self.metric_key = 'acc'
             self.metric_name = 'SST2Metric'
-        elif task_name == 'agnews':
+        elif task_name == 'medium':
             self.metric = AGNewsMetric(target='labels', pred='logits', tokenizer=tokenizer)
             self.metric_key = 'acc'
             self.metric_name = 'AGNewsMetric'
-        elif task_name == 'yelpp':
-            self.metric = YelpPMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'YelpPMetric'
-        elif task_name == 'dbpedia':
-            self.metric = DBPediaMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'DBPediaMetric'
-        elif task_name == 'rte':
-            self.metric = RTEMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'RTEMetric'
-        elif task_name == 'mrpc':
-            self.metric = MRPCMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'f1'
-            self.metric_name = 'MRPCMetric'
-        elif task_name == 'snli':
+        elif task_name == 'hard':
             self.metric = SNLIMetric(target='labels', pred='logits', tokenizer=tokenizer)
             self.metric_key = 'acc'
             self.metric_name = 'SNLIMetric'
-        elif task_name == 'chnsent':
-            self.metric = ChnSentMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'ChnSentMetric'
-        elif task_name == 'thucnews':
-            self.metric = THUCNewsMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'THUCNewsMetric'
-        elif task_name == 'lcqmc':
-            self.metric = LCQMCMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'LCQMCMetric'
-        elif task_name == 'cmnli':
-            self.metric = CMNLIMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'CMNLIMetric'
-        elif task_name == 'ocnli':
-            self.metric = OCNLIMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'OCNLIMetric'
-        elif task_name == 'amazon':
-            self.metric = AmazonMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'AmazonMetric'
-        elif task_name == 'bq':
-            self.metric = BQMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'BQMetric'
-        elif task_name == 'ccpm':
-            self.metric = CCPMMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'CCPMMetric'
-        elif task_name == 'tnews':
-            self.metric = TNewsMetric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'TNewsMetric'
-        elif task_name == 'c3':
-            self.metric = C3Metric(target='labels', pred='logits', tokenizer=tokenizer)
-            self.metric_key = 'acc'
-            self.metric_name = 'C3Metric'
         else:
             raise NotImplementedError
         self.margin = self.metric.margin
@@ -413,77 +115,38 @@ class LMForwardAPI:
         if test_data is None:
             bsz = len(dev_data['input_ids'])  # batch size of dev data is the orignal batch size of training data
         else:
-            bsz = batch_size  # for test data
+            bsz = 32  # for test data
         tmp_prompt = copy.deepcopy(prompt_embedding)  # list or numpy.ndarray
-        if isinstance(prompt_embedding, list):  # multiple queries
-            pe_list = []
-            for pe in prompt_embedding:
-                z = torch.tensor(pe).type(torch.float32)  # z
-                z = self.linear(z)  # Az
-                if self.init_prompt is not None:
-                    z = z + self.init_prompt  # Az + p_0
-                pe_list.append(z.reshape(n_prompt_tokens, -1).repeat(bsz, 1, 1))
-            prompt_embedding = torch.cat(pe_list)  # num_workers*bsz x prompt_len x dim
-            assert len(prompt_embedding) == len(train_data['input_ids'])
-        elif isinstance(prompt_embedding, np.ndarray):  # single query or None
+        if isinstance(prompt_embedding, np.ndarray):  # single query or None
             prompt_embedding = torch.tensor(prompt_embedding).type(torch.float32)  # z
             prompt_embedding = self.linear(prompt_embedding)  # Az
-            if self.init_prompt is not None:
-                prompt_embedding = prompt_embedding + self.init_prompt  # Az + p_0
-            prompt_embedding = prompt_embedding.reshape(n_prompt_tokens, -1).repeat(bsz, 1, 1)
+            prompt_embedding = prompt_embedding.reshape(50, -1).repeat(bsz, 1, 1)
         else:
             raise ValueError(
-                f'[Prompt Embedding] Only support [list, numpy.ndarray], got `{type(prompt_embedding)}` instead.'
+                f'[Prompt Embedding] Only support [numpy.ndarray], got `{type(prompt_embedding)}` instead.'
             )
         self.model.set_prompt_embedding(prompt_embedding)
 
         if isinstance(test_data, DataSet):
             if prompt_embedding.shape[0] > bsz:
                 raise ValueError('Provide a single prompt embedding for testing.')
-            test_tester = Tester(data=test_data, model=self.model, metrics=self.metric, batch_size=batch_size,
-                                 num_workers=1, device=device, use_tqdm=True)
+            test_tester = Tester(data=test_data, model=self.model, metrics=self.metric, batch_size=32,
+                                 num_workers=1, device=self.device, use_tqdm=True)
             results = test_tester.test()
             test_acc = results[self.metric_name][self.metric_key]
             # fitlog.add_best_metric(test_acc, name='test_acc')
             return test_acc
         else:
             for k, v in train_data.items():
-                train_data[k] = v.to(device)
+                train_data[k] = v.to(self.device)
             with torch.no_grad():
-                if model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-                    logits = self.model(
-                        input_ids=train_data['input_ids'],
-                        attention_mask=train_data['attention_mask'],
-                        decoder_input_ids=train_data['decoder_input_ids'],
-                        decoder_attention_mask=train_data['decoder_attention_mask'],
-                    )['logits']
-                elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-                    logits = self.model(
-                        input_ids=train_data['input_ids'],
-                        attention_mask=train_data['attention_mask'],
-                    )['logits']
-                else:
-                    logits = self.model(
-                        input_ids=train_data['input_ids'],
-                        attention_mask=train_data['attention_mask'],
-                        mask_pos=train_data['mask_pos'],
-                    )['logits']
+                logits = self.model(
+                    input_ids=train_data['input_ids'],
+                    attention_mask=train_data['attention_mask'],
+                    mask_pos=train_data['mask_pos'],
+                )['logits']
 
-            if parallel:  # we have multiple queries
-                all_losses, all_perfs = [], []
-                for i in range(len(logits) // bsz):
-                    tmp_logits = logits[i * bsz:i * bsz + bsz]
-                    tmp_target = train_data['labels'][i * bsz:i * bsz + bsz]
-                    tmp_loss, tmp_perf = self.calc_metric(tmp_logits, tmp_target)
-                    all_losses.append(tmp_loss)
-                    all_perfs.append(tmp_perf)
-                loss = min(all_losses)
-                best_sol = all_losses.index(loss)  # argmin
-                perf = all_perfs[best_sol]  # corresponding performance
-                tmp_prompt = tmp_prompt[best_sol]  # numpy.ndarray
-                prompt_embedding = pe_list[best_sol]  # to be prepended to the input
-            else:  # single query
-                loss, perf = self.calc_metric(logits, train_data['labels'])
+            loss, perf = self.calc_metric(logits, train_data['labels'])
             # fitlog.add_loss(loss, name=self.loss_type, step=self.num_call)
             # fitlog.add_metric(perf, name='train_acc', step=self.num_call)
 
@@ -505,29 +168,14 @@ class LMForwardAPI:
 
             if self.num_call % self.eval_every == 0:
                 print('********* Evaluated on dev set *********')
-                if parallel:  # if we have multiple queries, use the one that achieves minimal loss
-                    self.model.set_prompt_embedding(prompt_embedding)
                 for k, v in dev_data.items():
-                    dev_data[k] = v.to(device)
+                    dev_data[k] = v.to(self.device)
                 with torch.no_grad():
-                    if model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-                        logits = self.model(
-                            input_ids=dev_data['input_ids'],
-                            attention_mask=dev_data['attention_mask'],
-                            decoder_input_ids=dev_data['decoder_input_ids'],
-                            decoder_attention_mask=dev_data['decoder_attention_mask'],
-                        )['logits']
-                    elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-                        logits = self.model(
-                            input_ids=dev_data['input_ids'],
-                            attention_mask=dev_data['attention_mask'],
-                        )['logits']
-                    else:
-                        logits = self.model(
-                            input_ids=dev_data['input_ids'],
-                            attention_mask=dev_data['attention_mask'],
-                            mask_pos=dev_data['mask_pos'],
-                        )['logits']
+                    logits = self.model(
+                        input_ids=dev_data['input_ids'],
+                        attention_mask=dev_data['attention_mask'],
+                        mask_pos=dev_data['mask_pos'],
+                    )['logits']
 
                 dev_loss, dev_perf = self.calc_metric(logits, dev_data['labels'])
                 # fitlog.add_metric(dev_perf, name='dev_acc', step=self.num_call)
@@ -543,64 +191,16 @@ class LMForwardAPI:
                     round(float(dev_perf), 4),
                     round(float(self.best_dev_perf), 4)))
                 print('********* Done *********')
-            if parallel:
-                return all_losses
-            else:
-                return loss
+            return loss
 
 
-if model_name in ['roberta-base', 'roberta-large']:
-    tokenizer = RobertaTokenizer.from_pretrained(model_name)
-elif model_name in ['bert-base-uncased', 'bert-large-uncased', 'fnlp/cpt-large']:
-    tokenizer = BertTokenizer.from_pretrained(model_name)
-elif model_name in ['google/electra-base-generator', 'google/electra-large-generator']:
-    tokenizer = ElectraTokenizer.from_pretrained(model_name)
-elif model_name in ['facebook/bart-base', 'facebook/bart-large']:
-    tokenizer = BartTokenizer.from_pretrained(model_name)
-elif model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-    tokenizer = T5Tokenizer.from_pretrained(model_name)
-elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-    tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-else:
-    raise NotImplementedError
+tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
 
-cache_fn = f"caches/data_{model_name.replace('/', '-')}_{task_name}_{n_prompt_tokens}_{seed}.pt"
-if model_name not in ['fnlp/cpt-large']:
-    DataLoader = {
-        'sst2': SST2Loader,
-        'agnews': AGNewsLoader,
-        'yelpp': YelpPLoader,
-        'dbpedia': DBPediaLoader,
-        'rte': RTELoader,
-        'mrpc': MRPCLoader,
-        'snli': SNLILoader,
-    }
-else:
-    DataLoader = {
-        'chnsent': ChnSentLoader,
-        'thucnews': THUCNewsLoader,
-        'lcqmc': LCQMCLoader,
-        'cmnli': CMNLILoader,
-        'ocnli': OCNLILoader,
-        'amazon': AmazonLoader,
-        'bq': BQLoader,
-        'ccpm': CCPMLoader,
-        'tnews': TNewsLoader,
-        'c3': C3Loader,
-    }
-
-
-@cache_results(cache_fn, _refresh=False)
-def get_data(task_name, tokenizer):
-    if task_name in ['agnews', 'yelpp', 'dbpedia', 'snli']:
-        splits = ['train', 'test']
-    else:  # for datasets without test set, we use dev set
-        splits = ['train', 'validation']
-    if args.cat_or_add == 'cat':
-        data_bundle = DataLoader[task_name](tokenizer=tokenizer, n_prompt_tokens=0).my_load(splits)
-    else:
-        data_bundle = DataLoader[task_name](tokenizer=tokenizer, n_prompt_tokens=n_prompt_tokens).my_load(splits)
-    return data_bundle
+DataLoader = {
+    'easy': SST2Loader,
+    'medium': AGNewsLoader,
+    'hard': SNLILoader,
+}
 
 
 def construct_true_few_shot_data(train_data, k_shot):
@@ -628,122 +228,45 @@ def construct_true_few_shot_data(train_data, k_shot):
             new_dev_data.append(train_data[index])
             dev_label_count[label] += 1
 
-    if model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-        new_train_data.set_input("input_ids", "attention_mask", "decoder_input_ids", "decoder_attention_mask")
-        new_dev_data.set_input("input_ids", "attention_mask", "decoder_input_ids", "decoder_attention_mask")
-    elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-        new_train_data.set_input("input_ids", "attention_mask")
-        new_dev_data.set_input("input_ids", "attention_mask")
-    else:
-        new_train_data.set_input("input_ids", "attention_mask", "mask_pos")
-        new_dev_data.set_input("input_ids", "attention_mask", "mask_pos")
+    new_train_data.set_input("input_ids", "attention_mask", "mask_pos")
+    new_dev_data.set_input("input_ids", "attention_mask", "mask_pos")
 
     new_train_data.set_target("labels")
     new_dev_data.set_target("labels")
     return new_train_data, new_dev_data
 
 
-data_bundle = get_data(task_name=task_name, tokenizer=tokenizer)
-if task_name in ['agnews', 'yelpp', 'dbpedia', 'snli']:
-    train_data, test_data = data_bundle.get_dataset('train'), data_bundle.get_dataset('test')
-else:
-    train_data, test_data = data_bundle.get_dataset('train'), data_bundle.get_dataset('validation')
+@cache_results(f"caches/data_{args.task_name}_{args.seed}.pt", _refresh=False)
+def get_data(task_name, tokenizer):
+    if task_name == 'easy':
+        splits = ['train', 'validation']
+    else:  # for datasets without test set, we use dev set
+        splits = ['train', 'test']
+    data_bundle = DataLoader[task_name](tokenizer=tokenizer, n_prompt_tokens=50).my_load(splits)
+    return data_bundle
 
-train_data, dev_data = construct_true_few_shot_data(train_data, k_shot)
+
+data_bundle = get_data(task_name=args.task_name, tokenizer=tokenizer)
+if args.task_name == 'easy':
+    train_data, test_data = data_bundle.get_dataset('train'), data_bundle.get_dataset('validation')
+else:
+    train_data, test_data = data_bundle.get_dataset('train'), data_bundle.get_dataset('test')
+
+train_data, dev_data = construct_true_few_shot_data(train_data, 16)
 for ds in [train_data, dev_data, test_data]:
     ds.set_pad_val('input_ids', tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0)
     ds.set_pad_val('attention_mask', 0)
-print('# of train data: {}'.format(len(train_data)))
-print('Example:')
-print(train_data[0])
-print('\n# of dev data: {}'.format(len(dev_data)))
-print('Example:')
-print(dev_data[0])
-print('\n# of test data: {}'.format(len(test_data)))
-print('Example:')
-print(test_data[0])
 
-if model_name in ['t5-small', 't5-base', 't5-large', 't5-3b']:
-    train_data = {
-        'input_ids': torch.tensor(train_data['input_ids'].get(list(range(len(train_data))))),
-        'attention_mask': torch.tensor(train_data['attention_mask'].get(list(range(len(train_data))))),
-        'decoder_input_ids': torch.tensor(train_data['decoder_input_ids'].get(list(range(len(train_data))))),
-        'decoder_attention_mask': torch.tensor(train_data['decoder_attention_mask'].get(list(range(len(train_data))))),
-        'labels': torch.tensor(train_data['labels'].get(list(range(len(train_data))))),
-    }
-    dev_data = {
-        'input_ids': torch.tensor(dev_data['input_ids'].get(list(range(len(dev_data))))),
-        'attention_mask': torch.tensor(dev_data['attention_mask'].get(list(range(len(dev_data))))),
-        'decoder_input_ids': torch.tensor(dev_data['decoder_input_ids'].get(list(range(len(dev_data))))),
-        'decoder_attention_mask': torch.tensor(dev_data['decoder_attention_mask'].get(list(range(len(dev_data))))),
-        'labels': torch.tensor(dev_data['labels'].get(list(range(len(dev_data))))),
-    }
-elif model_name in ['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl']:
-    train_data = {
-        'input_ids': torch.tensor(train_data['input_ids'].get(list(range(len(train_data))))),
-        'attention_mask': torch.tensor(train_data['attention_mask'].get(list(range(len(train_data))))),
-        'labels': torch.tensor(train_data['labels'].get(list(range(len(train_data))))),
-    }
-    dev_data = {
-        'input_ids': torch.tensor(dev_data['input_ids'].get(list(range(len(dev_data))))),
-        'attention_mask': torch.tensor(dev_data['attention_mask'].get(list(range(len(dev_data))))),
-        'labels': torch.tensor(dev_data['labels'].get(list(range(len(dev_data))))),
-    }
-else:
-    train_data = {
-        'input_ids': torch.tensor(train_data['input_ids'].get(list(range(len(train_data))))),
-        'attention_mask': torch.tensor(train_data['attention_mask'].get(list(range(len(train_data))))),
-        'mask_pos': torch.tensor(train_data['mask_pos'].get(list(range(len(train_data))))),
-        'labels': torch.tensor(train_data['labels'].get(list(range(len(train_data))))),
-    }
-    dev_data = {
-        'input_ids': torch.tensor(dev_data['input_ids'].get(list(range(len(dev_data))))),
-        'attention_mask': torch.tensor(dev_data['attention_mask'].get(list(range(len(dev_data))))),
-        'mask_pos': torch.tensor(dev_data['mask_pos'].get(list(range(len(dev_data))))),
-        'labels': torch.tensor(dev_data['labels'].get(list(range(len(dev_data))))),
-    }
 
-model_forward_api = LMForwardAPI(
-    model_name=model_name,
-    n_prompt_tokens=n_prompt_tokens,
-    task_name=task_name,
-    # save_path=save_path,
-    loss_type=loss_type,
-    init_prompt_path=init_prompt_path
-)
-
-cma_opts = {
-    'seed': seed,
-    'popsize': popsize,
-    'maxiter': budget if parallel else budget // popsize,
-    'verbose': -1,
+train_data = {
+    'input_ids': torch.tensor(train_data['input_ids'].get(list(range(len(train_data))))),
+    'attention_mask': torch.tensor(train_data['attention_mask'].get(list(range(len(train_data))))),
+    'mask_pos': torch.tensor(train_data['mask_pos'].get(list(range(len(train_data))))),
+    'labels': torch.tensor(train_data['labels'].get(list(range(len(train_data))))),
 }
-if bound > 0:
-    cma_opts['bounds'] = [-1 * bound, 1 * bound]
-es = cma.CMAEvolutionStrategy(intrinsic_dim * [0], sigma, inopts=cma_opts)
-print('Population Size: {}'.format(es.popsize))
-print('{} Evaluation.'.format('Parallel' if parallel else 'Serial'))
-if parallel:
-    # expand training data to a larger batch for parallel evaluation
-    train_data['input_ids'] = train_data['input_ids'].repeat(es.popsize, 1)
-    train_data['attention_mask'] = train_data['attention_mask'].repeat(es.popsize, 1)
-    train_data['mask_pos'] = train_data['mask_pos'].repeat(es.popsize)
-    train_data['labels'] = train_data['labels'].repeat(es.popsize)
-
-# opt = cma.CMAOptions()
-start_time = time.time()
-while not es.stop():
-    solutions = es.ask()
-    if parallel:
-        fitnesses = model_forward_api.eval(solutions)
-    else:
-        fitnesses = [model_forward_api.eval(x) for x in solutions]
-    es.tell(solutions, fitnesses)
-    # es.logger.add()  # write data to disc to be plotted
-    # es.disp()
-end_time = time.time()
-print('Done. Elapsed time: {} (mins)'.format((end_time - start_time) / 60))
-print('Evaluate on test data...')
-test_acc = model_forward_api.eval(test_data=test_data)
-print('Test acc: {}'.format(round(test_acc, 4)))
-# fitlog.finish()
+dev_data = {
+    'input_ids': torch.tensor(dev_data['input_ids'].get(list(range(len(dev_data))))),
+    'attention_mask': torch.tensor(dev_data['attention_mask'].get(list(range(len(dev_data))))),
+    'mask_pos': torch.tensor(dev_data['mask_pos'].get(list(range(len(dev_data))))),
+    'labels': torch.tensor(dev_data['labels'].get(list(range(len(dev_data))))),
+}
