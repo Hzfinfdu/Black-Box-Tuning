@@ -74,7 +74,7 @@ model_forward_api = LMForwardAPI(
 
 
 # fitness function: model_forward_api.eval(d: np.ndarray of size(intrinsic_dim, )) -> fitness_value: int, eval_loss: None | int
-# evaluation is auto-conducted
+# evaluation is auto-conducted. Element 1 of the return value of the fwd api is eval loss in eval steps and None otherwise
 # run model_forward_api.eval(test_data=test_data) for test phase
 
 if alg == 'CMA':
@@ -113,7 +113,7 @@ elif alg == 'bo':
 
     def A_model_forward_api_eval(**kwargs):
         x = np.fromiter(kwargs.values(), dtype=float)
-        return -model_forward_api.eval(x)[0]
+        return -model_forward_api.eval(x)
 
 
     pbounds = dict(zip(bounds_x, bounds_range))
