@@ -191,7 +191,8 @@ class LMForwardAPI:
                     round(float(dev_perf), 4),
                     round(float(self.best_dev_perf), 4)))
                 print('********* Done *********')
-            return loss
+                return loss, dev_loss
+            return loss, None
 
 
 tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
