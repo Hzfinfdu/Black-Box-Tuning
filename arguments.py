@@ -2,7 +2,7 @@ import argparse
 
 def add_LM_forward_api_args(parser: argparse.ArgumentParser):
     group = parser.add_argument_group('fwd_api', 'forward api arguments')
-    group.add_argument("--task_name", default='easy', type=str)
+    group.add_argument("--task_name", default='easy', type=str)  # easy medium hard
     group.add_argument("--intrinsic_dim", default=500, type=int)
     group.add_argument("--budget", default=8000, type=int)
     group.add_argument("--device", default='cuda:0', type=str)

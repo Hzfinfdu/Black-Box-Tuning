@@ -52,6 +52,8 @@ Here we provide an implementation of inference optimization using ONNX Runtime. 
 SDK `onnxruntime-gpu` is required for optimization. Installation of this package can be troublesome. And there may be some environment-specific errors or unexpected performance. But in real-world scenarios, this is a part of the black box on the server side.
 
 On an NVIDIA GeForce RTX 3090 GPU with Driver Version: 470.82.00, CUDA Version: 11.4 and Cudnn Version:8.2.4, the following code works well to configure the environment.
+
+See [here](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html) for detailed hardware requirements.
 ```bash
 pip install transformers==4.1.1
 pip install datasets
