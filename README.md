@@ -42,23 +42,6 @@ python bbt.py \
   --eval_every 100
 ```
 
-In addition, black-box tuning also supports parallel evaluation. That is, you can evaluate a population of solutions in parallel by putting them into a single large batch. For example,
-
-```bash
-python bbt.py \
-  --task_name "sst2" \
-  --n_prompt_tokens 50 \
-  --intrinsic_dim 500 \
-  --k_shot 16 \
-  --device "cuda:0" \
-  --seed 42 \
-  --loss_type "ce" \
-  --cat_or_add "add" \
-  --budget 300 \
-  --print_every 10 \
-  --eval_every 20 \
-  --parallel
-```
 
 ## Inference Optimization
 
@@ -134,10 +117,12 @@ And we can implement our algorithm from then on. We provide a baseline example.
 We offer 3 datasets for evaluation, namely sst2(sentiment analysis, 2-label), agnews(topic cls, 4-label) and snli(sentence-pair cls, 3-label).
 Difficulty of the 3 datasets increases in order. So their alias in the code are `easy`, `medium` and `hard`.
 
-We report a baseline result reported in the BBT paper.
+We give a baseline result reported in the BBT paper.
 
 ## Baseline performance
 
 sst2(easy): 89.56(0.25)
+
 agnews(medium): 81.51(0.79)
+
 snli(hard): 46.58(1.33)

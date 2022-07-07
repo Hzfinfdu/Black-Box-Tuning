@@ -19,6 +19,8 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 
+
+# black box API
 class LMForwardAPI:
     def __init__(self, intrinsic_dim=500, n_prompt_tokens=50, task_name='easy', loss_type='hinge',
                  inference_framework='pt', onnx_model_path=None, save_path=None, device='cuda:0'):
@@ -195,6 +197,7 @@ class LMForwardAPI:
             return loss, None
 
 
+# preparing data
 tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
 
 DataLoader = {

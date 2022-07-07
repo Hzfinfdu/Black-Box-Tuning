@@ -1,6 +1,6 @@
 import time
 import os
-from bbt import LMForwardAPI, args, train_data, dev_data, test_data
+from bbt import LMForwardAPI, args, train_data, test_data
 import torch
 import numpy as np
 import cma
@@ -64,16 +64,16 @@ model_forward_api = LMForwardAPI(
 )
 
 ########################################## Notes #######################################################
-# Above are tunable parameters. Implementation details are wrapped in LMForwardAPI. Just treat it as a black box :)
+# Above are hyperparameters. Implementation details are wrapped in LMForwardAPI. Just treat it as a black box :)
 # model_forward_api.eval is the fitness function, it takes a numpy.ndarray of size (intrinsic_dim,) as input and gives a real fitness value.
 # Below is the baseline method implemented with cma-es (for default arguments see arguments.py). Its performance is reported in the readme :)
-# In real world NLP scenarios, different from previous benchmarks, our BBT method does not mainly focus on fitting but on generalization.
+# In real-world NLP scenarios, different from previous benchmarks, our BBT method does not mainly focus on fitting but on generalization.
 # Therefore, in the black box api, we validate on a validation set (of the same size as the training set) every 100 fitness evaluation and maintain the best param.
 # After the training phase we use the best param for testing (on a far larger test set), and get a test score for comparison.
 ########################################### End ########################################################
 
 
-# fitness function: model_forward_api.eval(d: np.ndarray of size(intrinsic_dim, )) -> fitness_value: int, eval_loss: None | int
+# fitness function: model_forward_api.eval(d: np.ndarray of size(intrinsic_dim, )) -> Tuple(fitness_value: int, eval_loss: None | int)
 # evaluation is auto-conducted. Element 1 of the return value of the fwd api is eval loss in eval steps and None otherwise
 # run model_forward_api.eval(test_data=test_data) for test phase
 
