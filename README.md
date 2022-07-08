@@ -29,7 +29,7 @@ bash run.sh
 
 
 ```bash
-python bbt.py \
+python shallow_bbt_optim.py \
   --task_name "easy" \
   --intrinsic_dim 500 \
   --device "cuda:0" \
@@ -76,7 +76,7 @@ Then you can modify `run.sh`.
 By setting parameter `inference_framework` to `'ort'` and `onnx_model_path` to `<Your model path>`,
 a faster version of BBT is ready. Here is an example.
 ```bash
-python bbt.py \
+python shallow_bbt_optim.py \
   --task_name "easy" \
   --intrinsic_dim 500 \
   --device "cuda:0" \
