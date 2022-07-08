@@ -14,6 +14,7 @@ pip install datasets
 pip install fastNLP
 pip install cma
 pip install sklearn
+pip install bayesian-optimization
 git clone https://github.com/txsun1997/Black-Box-Tuning
 cd Black-Box-Tuning
 ```
@@ -29,14 +30,10 @@ bash run.sh
 
 ```bash
 python bbt.py \
-  --task_name "sst2" \
-  --n_prompt_tokens 50 \
+  --task_name "easy" \
   --intrinsic_dim 500 \
-  --k_shot 16 \
   --device "cuda:0" \
   --seed 42 \
-  --loss_type "ce" \
-  --cat_or_add "add" \
   --budget 8000 \
   --print_every 50 \
   --eval_every 100
@@ -60,6 +57,7 @@ pip install datasets
 pip install fastNLP
 pip install cma
 pip install sklearn
+pip install bayesian-optimization
 pip3 install torch --extra-index-url https://download.pytorch.org/whl/cu113
 pip install onnx
 pip install onnxruntime-gpu==1.10.0
@@ -79,14 +77,10 @@ By setting parameter `inference_framework` to `'ort'` and `onnx_model_path` to `
 a faster version of BBT is ready. Here is an example.
 ```bash
 python bbt.py \
-  --task_name "sst2" \
-  --n_prompt_tokens 50 \
+  --task_name "easy" \
   --intrinsic_dim 500 \
-  --k_shot 16 \
   --device "cuda:0" \
   --seed 42 \
-  --loss_type "ce" \
-  --cat_or_add "add" \
   --budget 8000 \
   --print_every 50 \
   --eval_every 100 \

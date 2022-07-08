@@ -100,11 +100,10 @@ if __name__ == '__main__':
     n_prompt_tokens = args.n_prompt_tokens
     prompt_embed_dim = args.prompt_embed_dim
     is_deep = args.deep
-    print(is_deep)
     if is_deep:
-        from deep_modeling_roberta import RobertaModel
+        from models.deep_modeling_roberta import RobertaModel
     else:
-        from modeling_roberta import RobertaModel
+        from models.modeling_roberta import RobertaModel
 
     if args.cat_or_add not in ['add', 'cat']:
         raise ValueError(f'Argument `cat_or_add` only supports `cat` and `add`, got `{args.cat_or_add}` instead.')
@@ -113,7 +112,7 @@ if __name__ == '__main__':
     tokenizer = RobertaTokenizer.from_pretrained(model_name)
     model = RobertaModel.from_pretrained(model_name).eval().cuda()
     model.concat_prompt = args.cat_or_add == 'cat'
-    input_ids = torch.randint(low=1, high=10000, size=(bsz, max_seq_len), dtype=torch.int64, device='cuda')
+    input_ids = torch.randint(low=1, high=10000, size=(bsz, max_seq_len), dtype=torch.long, device='cuda')
     attention_mask = torch.ones((bsz, max_seq_len), dtype=torch.int64, device='cuda')
     if is_deep:
         prompt_embedding = torch.randn(size=(config.num_hidden_layers, n_prompt_tokens, prompt_embed_dim), dtype=torch.float32, device='cuda')
